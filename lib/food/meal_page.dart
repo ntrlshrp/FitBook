@@ -331,26 +331,44 @@ class _MealPageState extends State<MealPage> {
               final columns = db.foods.$columns
                   .where((column) => column.type == DriftSqlType.double)
                   .toList();
-              Map<String, Variable<double>> combinedFood = {};
+
+              // Use a simple map to accumulate totals for each numeric field
+              Map<String, double> combinedTotals = {};
 
               for (final picked in pickedFoods) {
                 final food = await (db.foods.select()
                       ..where((u) => u.id.equals(picked.id)))
                     .getSingle();
+
                 final foodCols = food.toColumns(true);
 
+                // Calculate how much of the original serving is used
+                final baseServingG = convertToGrams(
+                  food.servingSize ?? 100,
+                  food.servingUnit ?? 'grams',
+                );
+
+                final pickedGrams = picked.unit == 'serving'
+                    ? baseServingG * picked.quantity
+                    : convertToGrams(picked.quantity, picked.unit);
+
+                final ratio = pickedGrams / baseServingG;
+
                 for (final column in columns) {
-                  if (combinedFood[column.name] == null)
-                    combinedFood[column.name] = foodCols[column.name] == null
-                        ? Variable(0)
-                        : (foodCols[column.name] as Variable<double>);
-                  else if (foodCols[column.name] != null)
-                    combinedFood[column.name] = Variable(
-                      ((combinedFood[column.name] as Variable<double>).value! +
-                          (foodCols[column.name] as Variable<num>).value!),
-                    );
+                  final value = (foodCols[column.name] as Variable<num>?)
+                          ?.value
+                          ?.toDouble() ??
+                      0.0;
+                  combinedTotals[column.name] =
+                      (combinedTotals[column.name] ?? 0) + value * ratio;
                 }
               }
+
+              // Convert totals back into the map expected by RawValuesInsertable
+              final combinedFood = {
+                for (final entry in combinedTotals.entries)
+                  entry.key: Variable(entry.value),
+              };
 
               await (db.foods.insertOne(
                 RawValuesInsertable({
